@@ -45,3 +45,4 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             INSPECTOR_VERSION=${{ steps.meta.outputs.version || 'latest' }}
+          entrypoint: '["mcp-inspector","--host","0.0.0.0","--port","5173","--proxy-port","3000"]'
