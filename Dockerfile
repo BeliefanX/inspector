@@ -1,15 +1,25 @@
 # syntax=docker/dockerfile:1
-# ---------- 运行时镜像 ----------
+# ────────────────────────────────────────────────
+#   MCP Inspector (beliefan 版)
+#   * 默认 UI 端口：5173
+#   * 默认代理端口：3000
+#   * 始终监听 0.0.0.0
+# ────────────────────────────────────────────────
 FROM node:20-alpine AS runtime
 
-# 接收一个版本参数；默认始终装 latest
+# 如果日后想锁定版本，在构建时传入：
+#   docker build --build-arg INSPECTOR_VERSION=0.10.0 .
 ARG INSPECTOR_VERSION=latest
+
 RUN npm install -g @modelcontextprotocol/inspector@${INSPECTOR_VERSION}
 
-# Inspector UI 默认 5173，代理默认 3000
+# ── 用官方支持的环境变量改端口 ───────────────────
+#   README 说明：CLIENT_PORT / SERVER_PORT 可覆盖 6274 / 6277 :contentReference[oaicite:0]{index=0}
+ENV CLIENT_PORT=5173 \
+    SERVER_PORT=3000
+
+# ── 对外暴露端口 ───────────────────────────────────
 EXPOSE 5173 3000
 
-# 允许把真正要测试的 MCP 服务器命令作为参数传进来
-ENTRYPOINT ["mcp-inspector"]
-# 例如：
-#   docker run ... mcp-inspector node build/index.js
+# ── 启动：强制绑定所有网卡 ─────────────────────────
+ENTRYPOINT ["mcp-inspector", "--host", "0.0.0.0"]
