@@ -3,16 +3,17 @@ name: Build & Publish MCP-Inspector
 on:
   push:
     branches: [main]
-    paths: ['Dockerfile', 'docker-entrypoint.sh']
+    paths: ['Dockerfile', 'docker-entrypoint.sh', '.github/workflows/docker-publish.yml']
   release:
     types: [published]
   schedule:
-    - cron: '0 3 * * *'          # 每天 03:00 UTC 巡检一次
+    - cron: '0 3 * * *'      # 每天 03:00 UTC 巡检
   workflow_dispatch: {}
 
 env:
   REGISTRY: docker.io
   IMAGE_NAME: beliefan/inspector
+  PACKAGE_NAME: '@modelcontextprotocol/inspector'   # NPM 包名
 
 jobs:
   build:
@@ -20,30 +21,78 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ─────────────── ① 读取“官方最新版本” ───────────────
+      - name: Get latest version from NPM
+        id: npm
+        run: |
+          LATEST=$(npm view ${{ env.PACKAGE_NAME }} version)
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+
+      # ─────────────── ② 读取“当前镜像版本” ───────────────
+      - name: Get current image version (if any)
+        id: current
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+        run: |
+          if docker pull "$IMG" 2>/dev/null ; then
+            VER=$(docker inspect "$IMG" \
+                 --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')
+            echo "current=$VER" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ─────────────── ③ 判定是否需要构建 ───────────────
+      - name: Decide whether to build
+        id: decide
+        run: |
+          echo "latest = ${{ steps.npm.outputs.latest }}"
+          echo "current = ${{ steps.current.outputs.current }}"
+          if [ "${{ steps.npm.outputs.latest }}" = "${{ steps.current.outputs.current }}" ]; then
+            echo "skip=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 如果版本相同就直接终止 job
+      - name: Skip build
+        if: steps.decide.outputs.skip == 'true'
+        run: echo "🟢 Inspector 已是最新版，跳过构建。"
+
+      # ─────────────── ④ 以下步骤仅在需要时运行 ───────────────
       - uses: docker/setup-qemu-action@v3
+        if: steps.decide.outputs.skip == 'false'
       - uses: docker/setup-buildx-action@v3
+        if: steps.decide.outputs.skip == 'false'
 
       - uses: docker/login-action@v3
+        if: steps.decide.outputs.skip == 'false'
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
 
       - id: meta
+        if: steps.decide.outputs.skip == 'false'
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.npm.outputs.latest }}
           tags: |
-            type=semver,pattern={{version}}
+            type=raw,value=latest
+            type=raw,value=${{ steps.npm.outputs.latest }}
             type=sha
-            latest
 
       - uses: docker/build-push-action@v5
+        if: steps.decide.outputs.skip == 'false'
         with:
           context: .
           push: true
+          build-args: |
+            INSPECTOR_VERSION=${{ steps.npm.outputs.latest }}
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to:   type=gha,mode=max
